@@ -73,8 +73,8 @@ def detect_circle(im, kind="pot"):
     score, cx, cy, radius = max(candidates, key=lambda item: item[0])
     return dict(ok=bool(score >= .60 and radius / sw >= .34),
                 source="auto_unverified", score=round(score, 4),
-                center=[round(cx / sw, 6), round(cy / sh, 6)],
-                radius_fraction=round(radius / sw, 6),
+                center=[round(float(cx / sw), 6), round(float(cy / sh), 6)],
+                radius_fraction=round(float(radius / sw), 6),
                 reason="仅供目视校准")
 
 def crop_original(im, circle, ratio, framing, target_y):
