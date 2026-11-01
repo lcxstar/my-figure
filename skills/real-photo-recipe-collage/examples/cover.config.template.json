@@ -1,0 +1,33 @@
+{
+  "file": "../../my_food_original.jpg",
+  "output": "../../output/food_cover.png",
+  "canvas": [
+    1200,
+    1600
+  ],
+  "background": "#C8C8C3",
+  "mask": {
+    "mode": "ellipse",
+    "center": [
+      0.5,
+      0.5
+    ],
+    "radius": [
+      0.42,
+      0.33
+    ],
+    "feather_px": 1.25
+  },
+  "subject_center_on_canvas": [
+    0.5,
+    0.5
+  ],
+  "subject_width_fraction": 0.86,
+  "color": {
+    "brightness": 1.025,
+    "contrast": 1.025,
+    "saturation": 1.025,
+    "sharpness": 1.03
+  },
+  "approved_source_sha256": null
+}
