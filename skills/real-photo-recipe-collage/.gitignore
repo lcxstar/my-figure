@@ -1,0 +1,8 @@
+output/
+originals/
+examples/demo/
+*_QA.json
+*_校准预览.jpg
+__pycache__/
+.pytest_cache/
+.venv/
