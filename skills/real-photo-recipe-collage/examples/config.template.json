@@ -1,0 +1,43 @@
+{
+  "recipe": "示例菜谱",
+  "preset": "natural_appetizing_v2",
+  "subject_type": "pot",
+  "width": 1500,
+  "height": 2000,
+  "margin": 5,
+  "gap": 10,
+  "framing": 0.975,
+  "output": "../output/recipe.png",
+  "steps": [
+    {
+      "file": "originals/01.jpg",
+      "number": "01",
+      "label": "步骤1"
+    },
+    {
+      "file": "originals/02.jpg",
+      "number": "02",
+      "label": "步骤2"
+    },
+    {
+      "file": "originals/03.jpg",
+      "number": "03",
+      "label": "步骤3"
+    },
+    {
+      "file": "originals/04.jpg",
+      "number": "04",
+      "label": "步骤4"
+    },
+    {
+      "file": "originals/05.jpg",
+      "number": "05",
+      "label": "步骤5"
+    },
+    {
+      "file": "originals/06.jpg",
+      "number": "06",
+      "label": "步骤6"
+    }
+  ]
+}
