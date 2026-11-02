@@ -8,8 +8,10 @@ import json
 from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+import cv2
+import math
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 LIMITS = {"brightness":(.90,1.10),"contrast":(.90,1.10),
           "saturation":(.88,1.12),"sharpness":(.88,1.12)}
 DEFAULT_COLORS = {"brightness":1.035,"contrast":1.035,
@@ -32,15 +34,109 @@ def pair(x, title):
         raise ValueError(f"{title} 必须在 0~1 范围内")
     return a,b
 
-def make_mask(size, data, parent):
+
+def _ellipse_mask(size, ellipse, feather):
+    """Use the actual rim ellipse. Crop geometry never includes the arm in centering."""
     w,h=size
+    cx,cy,rx,ry,angle=map(float,ellipse)
+    if not (0<rx and 0<ry and cx-rx>=-max(rx,ry)*.15 and
+            cy-ry>=-max(rx,ry)*.15):
+        raise ValueError("检测到的碗盘几何不合理")
+    scale=2
+    pts=[]
+    phi=math.radians(angle)
+    for k in range(360):
+        theta=math.radians(k)
+        u,v=rx*math.cos(theta),ry*math.sin(theta)
+        px=cx+u*math.cos(phi)-v*math.sin(phi)
+        py=cy+u*math.sin(phi)+v*math.cos(phi)
+        pts.append((round(px*scale),round(py*scale)))
+    if min(x for x,_ in pts)<0 or max(x for x,_ in pts)>=w*scale or min(y for _,y in pts)<0 or max(y for _,y in pts)>=h*scale:
+        raise ValueError("碗盘外沿超出照片边缘，需要人工轮廓蒙版")
+    mask=Image.new("L",(w*scale,h*scale),0)
+    ImageDraw.Draw(mask).polygon(pts,fill=255)
+    mask=mask.resize((w,h),Image.Resampling.LANCZOS)
+    if feather:
+        mask=mask.filter(ImageFilter.GaussianBlur(feather))
+    return mask
+
+def detect_dish_rim(original, confidence_min=0.72):
+    """Detect external white plate/bowl rim; never use food saliency or hand centroid.
+    Conservative detector: ambiguous objects are rejected, not silently re-centered.
+    """
+    if not (0.45<=confidence_min<=0.95):
+        raise ValueError("confidence_min 范围为 0.45-0.95")
+    w,h=original.size
+    scale=min(1.,950/max(w,h))
+    sw,sh=max(60,int(round(w*scale))),max(60,int(round(h*scale)))
+    rgb=np.asarray(original.resize((sw,sh),Image.Resampling.LANCZOS))
+    hsv=cv2.cvtColor(rgb,cv2.COLOR_RGB2HSV)
+    # Plate and bowl are generally light neutral/white; hand is usually chromatic.
+    bright=cv2.inRange(hsv,np.array([0,0,155],dtype=np.uint8),
+                             np.array([179,80,255],dtype=np.uint8))
+    bright=cv2.morphologyEx(bright,cv2.MORPH_CLOSE,
+                           cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(9,9)))
+    contours,_=cv2.findContours(bright,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    found=[]
+    for c in contours:
+        if len(c)<5: continue
+        area=cv2.contourArea(c)
+        if area<sw*sh*.095: continue
+        x,y,cw,ch=cv2.boundingRect(c)
+        if cw<sw*.43 or cw>sw*.995 or ch<sh*.26 or ch>sh*.90:continue
+        if min(x,y)<3 or x+cw>sw-3 or y+ch>sh-3:continue
+        (cx,cy),(major,minor),angle=cv2.fitEllipse(c)
+        # cv2.fitEllipse always returns the center and two orthogonal diameters.
+        rx,ry=major/2,minor/2
+        if not (.20*sw<cx<.80*sw and .19*sh<cy<.84*sh):continue
+        if min(rx,ry)<sw*.13:continue
+        shape_ratio=max(rx,ry)/min(rx,ry)
+        if shape_ratio>1.95:continue
+        ellipse_area=math.pi*rx*ry
+        fill_ratio=area/max(1,ellipse_area)
+        if not .70<=fill_ratio<=1.22:continue
+        boundary=c.reshape(-1,2).astype(float)
+        # Ellipse fit quality (normalized implicit ellipse-distance residual).
+        p=math.radians(angle)
+        dx,dy=boundary[:,0]-cx,boundary[:,1]-cy
+        u=dx*math.cos(p)+dy*math.sin(p)
+        v=-dx*math.sin(p)+dy*math.cos(p)
+        radial=np.sqrt((u/max(rx,1))**2+(v/max(ry,1))**2)
+        residual=float(np.quantile(np.abs(radial-1),.75))
+        contour_fit=max(0.,1.-residual/.14)
+        central=max(0.,1.-abs(cx/sw-.5)-abs(cy/sh-.5))
+        strength=min(1.,(cw/sw)/.75)
+        quality=.66*contour_fit+.20*min(1.,fill_ratio)+.09*strength+.05*central
+        found.append((quality,(cx,cy,rx,ry,angle),area,contour_fit))
+    if not found:
+        raise ValueError("自动定位失败：无法可靠识别完整白色盘/碗外沿；请使用人工确认的 alpha_file 蒙版，不得套用旧图中心")
+    quality,ellipse,area,fit=max(found,key=lambda t:t[0])
+    if quality<confidence_min:
+        raise ValueError(f"碗盘轮廓检测置信度不足（{quality:.3f}），需要人工蒙版或校准，禁止自动输出错误居中图")
+    center_x,center_y,rad_x,rad_y,angle=ellipse
+    geometry=[center_x/scale,center_y/scale,rad_x/scale,rad_y/scale,angle]
+    return geometry,{"method":"white_rim_external_contour_fitEllipse",
+                     "confidence":round(quality,4),
+                     "fit_quality":round(fit,4),
+                     "center_source_px":[round(geometry[0],2),round(geometry[1],2)],
+                     "ellipse_source_px":[round(v,2) for v in geometry],
+                     "hand_used_for_center":False,
+                     "warning":"仅适用外沿明亮、轮廓完整的盘/碗；输出必须目视确认，不能保证无损去手"}
+
+def make_mask(size, data, parent, original=None):
+    w,h=size
+    if data.get("mode")=="auto_plate":
+        if original is None: raise ValueError("auto_plate 需要真实原片输入")
+        ellipse,meta=detect_dish_rim(original,float(data.get("confidence_min",.72)))
+        mask=_ellipse_mask(size,ellipse,float(data.get("feather_px",1.0)))
+        return mask, {"mode":"auto_plate",**meta}
     if data.get("mode")=="alpha_file":
         p=resolve(parent,data["file"])
         with Image.open(p) as im: mask=im.convert("L")
         if mask.size!=size: raise ValueError("蒙版尺寸必须等于原图尺寸；不可自动拉伸")
         return mask, {"mode":"alpha_file","sha256":digest(p),"source":str(p)}
     if data.get("mode")!="ellipse":
-        raise ValueError("mask.mode 必须为 ellipse 或 alpha_file")
+        raise ValueError("mask.mode 必须为 auto_plate、ellipse 或 alpha_file")
     cx,cy=pair(data["center"],"mask.center")
     rx,ry=pair(data["radius"],"mask.radius")
     if rx<=0 or ry<=0 or cx-rx<0 or cy-ry<0 or cx+rx>1 or cy+ry>1:
@@ -135,7 +231,7 @@ def render(config):
         raise ValueError("原图已更换，旧的裁剪与蒙版参数不可复用")
     with Image.open(origin) as im:
         original=ImageOps.exif_transpose(im).convert("RGB")
-    mask,mask_meta=make_mask(original.size,data["mask"],config.parent)
+    mask,mask_meta=make_mask(original.size,data["mask"],config.parent,original)
     bbox=mask.point(lambda x:255 if x>=128 else 0).getbbox()
     if not bbox: raise ValueError("蒙版无前景")
     left,top,right,bottom=bbox
@@ -194,6 +290,29 @@ def render(config):
         "center_error_px":[center_px[0]-center_target_px[0],center_px[1]-center_target_px[1]],
         "contact_shadow":shadow_strength,
         "note":"必须目视确认真实蒙版贴合盘沿、手部移除、碗盘居中、轻调色；遮挡盘沿处禁止凭空修复。"}
+    # Diagnostic overlay is generated from the unmodified original and excluded from final cover.
+    preview=original.copy()
+    d=ImageDraw.Draw(preview)
+    width=max(3,round(min(original.size)/240))
+    if mask_meta.get("mode")=="auto_plate":
+        cx,cy,rx,ry,angle=mask_meta["ellipse_source_px"]
+        phi=math.radians(angle)
+        boundary=[]
+        for k in range(241):
+            t=2*math.pi*k/240
+            u,v=rx*math.cos(t),ry*math.sin(t)
+            boundary.append((cx+u*math.cos(phi)-v*math.sin(phi),
+                             cy+u*math.sin(phi)+v*math.cos(phi)))
+        d.line(boundary,fill=(255,60,40),width=width,joint="curve")
+        d.line((cx-18,cy,cx+18,cy),fill=(10,130,250),width=width)
+        d.line((cx,cy-18,cx,cy+18),fill=(10,130,250),width=width)
+    else:
+        d.rectangle(bbox,outline=(255,60,40),width=width)
+    preview_path=out.with_name(out.stem+"_QA_rim_preview.png")
+    preview.save(preview_path)
+    qa["rim_preview"]=str(preview_path)
+    qa["placement_basis"]="plate_bowl_outer_rim_mask_not_food_or_hand"
+    qa["hand_removal_method"]="mask_exclusion_of_pixels_outside_plate"
     out.with_name(out.stem+"_QA.json").write_text(
         json.dumps(qa,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     return out,qa
