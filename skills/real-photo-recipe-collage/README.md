@@ -1,4 +1,4 @@
-# Real Photo Recipe Skill v2.7 / 真实原图菜谱（六联图＋封面图＋写菜谱）
+# Real Photo Recipe Skill v2.8 / 真实原图菜谱（六联图＋封面图＋精简写菜谱）
 
 可复用的 6 张原片菜谱步骤图 Skill：保留食材、锅、盘、摆放和原始照片结构，**不使用生成式 AI 重画食物**。输出 3:4 竖版、2 列 × 3 行步骤拼图，统一绿圈编号和底部奶白标签。
 
@@ -39,7 +39,7 @@ python cover_photo.py --config examples/cover.config.template.json
 
 涉及个人照片的原图、蒙版和生成结果只留本地，不上传公开仓库。
 
-## v2.7 写菜谱
+## v2.8 写菜谱（默认精简）
 
 输入菜名、食材和实际操作（可加照片），说“写菜谱”或“按照菜谱 Skill 写步骤”，即使用统一文案格式：
 
@@ -53,4 +53,4 @@ python cover_photo.py --config examples/cover.config.template.json
 3. 继续按实际过程编号。
 ```
 
-每一步不加四字小标题，语言稍口语化、不写套话；保持真实顺序、火候与时间，不推测未明确的调味料和用量。图片通常可以做六联图，但文字不强行限定为六步。详细触发、修订和证据规范见 [references/recipe-writing.md](references/recipe-writing.md)。此子功能是写作指令，无须安装新 Python 依赖，不影响已有两个图像功能。
+默认5–7步、每步约20–45字，尽量每步一句，语言稍口语化；完整保留真实顺序、关键火候、时间和食材比例，不推测未明确的调味料和用量。每一步不加四字小标题，**不输出技巧、心得、总结、制作感受及任何额外段落**。真实工序需要更多或更少步骤时不强行凑数；图片六联图与菜谱文字的步骤数量不必完全相同，除非用户要求一一对应。详细触发、修订和证据规范见 [references/recipe-writing.md](references/recipe-writing.md)。此子功能是写作指令，无须安装新 Python 依赖，不影响已有两个图像功能。
