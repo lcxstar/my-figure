@@ -1,4 +1,4 @@
-# Real Photo Recipe Skill v2.4 / 真实原图菜谱（六联图＋封面图）
+# Real Photo Recipe Skill v2.5 / 真实原图菜谱（六联图＋封面图）
 
 可复用的 6 张原片菜谱步骤图 Skill：保留食材、锅、盘、摆放和原始照片结构，**不使用生成式 AI 重画食物**。输出 3:4 竖版、2 列 × 3 行步骤拼图，统一绿圈编号和底部奶白标签。
 
@@ -21,14 +21,20 @@
 ## 分享注意
 
 公开版本不包含用户私人菜谱原片、厨房照片、个人文件路径、生成结果或字体文件。照片仍归照片所有者。仓库原有 MIT License 适用。本 Skill 存在于公开仓库 lcxstar/my-figure 的独立目录，可单独复制为新仓库。
-## v2.4 原图保真封面模式
+## v2.5 制作封面图：原图保真、居中、浅灰植物纹桌布
 
-命令：python cover_photo.py --config examples/cover.config.template.json
+本模式与六联图独立：旧六联图脚本 recipe_collage.py 不变。
 
-- 只使用真实照片像素进行抠图、等比缩放、居中和轻调色；禁止生成式重绘，禁止凭空补食物或盘沿。
-- 默认 1200×1600 竖版封面；统一纯色浅灰背景 #C8C8C3，配白色盘子较为清爽，不会压得太暗。
-- 默认调色：亮度/对比/饱和度各 1.025，锐度 1.03；可以修改配置，但不建议超过保真界限。
-- 首次处理需要根据原图调整蒙版位置。规则碗盘可以用 ellipse 蒙版进行近似预览，边缘不规则时需要同尺寸黑白 alpha_file 蒙版。
-- 去手只去除主体以外的手。手遮住盘沿时不能无损恢复，必须明确报告限制，不得为了美化而重画。
-- 每张图片写入源文件 SHA256 和 _QA.json；默认 review_required，需人工确认盘沿、手、主体形状和背景。
-- 六联图原有 recipe_collage.py 仍独立使用，未改变既有排版算法。
+1. 把一张原始美食照片与可校验的蒙版写入 examples/cover.config.template.json 的副本。盘/碗完整保留，去手仅删除主体外背景；若手压住盘沿，不进行生成式补画。
+2. 基于前景蒙版非透明外接框居中，默认画布 1200×1600（3:4）；主体宽 86%，左右留白均衡。注意：蒙版须对准真实碗盘外缘，默认 ellipse 只是候选。
+3. 背景默认使用浅灰布纹与非常淡的植物花纹（linen_botanical, #D0D0CB），也支持 background.mode=image 并指向真实拍摄的桌布图片，以得到真正的照片级布料质感。背景花纹只出现在主体之外。
+4. 默认轻调色：brightness=1.035、contrast=1.035、saturation=1.045、sharpness=1.035。可针对用户反馈单独调整。
+5. 接触阴影默认 contact_shadow=0.10，只加在背景，不改原菜像素的构图或形状。
+6. 输出 PNG 与 _QA.json：记录蒙版 bbox、画布中心误差、背景来源、原片 SHA256 与调色。程序误差为零也不能替代目视检查，新照片必须人工核对。
+
+执行：
+
+    python -m pip install -r requirements.txt
+    python cover_photo.py --config examples/cover.config.template.json
+
+兼容旧版纯灰背景配置，例如 background="#C8C8C3"。真实用户照片、背景素材、运行结果不纳入公开仓库。
