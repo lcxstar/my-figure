@@ -5,18 +5,23 @@
     1200,
     1600
   ],
-  "background": "#C8C8C3",
+  "background": {
+    "mode": "linen_botanical",
+    "base_color": "#D0D0CB",
+    "texture_strength": 1,
+    "pattern_opacity": 0.18
+  },
   "mask": {
     "mode": "ellipse",
     "center": [
       0.5,
-      0.5
+      0.53
     ],
     "radius": [
-      0.42,
-      0.33
+      0.43,
+      0.3
     ],
-    "feather_px": 1.25
+    "feather_px": 1
   },
   "subject_center_on_canvas": [
     0.5,
@@ -24,10 +29,11 @@
   ],
   "subject_width_fraction": 0.86,
   "color": {
-    "brightness": 1.025,
-    "contrast": 1.025,
-    "saturation": 1.025,
-    "sharpness": 1.03
+    "brightness": 1.035,
+    "contrast": 1.035,
+    "saturation": 1.045,
+    "sharpness": 1.035
   },
-  "approved_source_sha256": null
+  "approved_source_sha256": null,
+  "contact_shadow": 0.1
 }
