@@ -12,15 +12,8 @@
     "pattern_opacity": 0.18
   },
   "mask": {
-    "mode": "ellipse",
-    "center": [
-      0.5,
-      0.53
-    ],
-    "radius": [
-      0.43,
-      0.3
-    ],
+    "mode": "auto_plate",
+    "confidence_min": 0.72,
     "feather_px": 1
   },
   "subject_center_on_canvas": [
