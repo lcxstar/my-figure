@@ -399,7 +399,7 @@ def generate(config, args):
 
 def main():
     parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v3.0 固定字体自动终稿")
-    parser.add_argument("--config",required=True)
+    parser.add_argument("--config")
     parser.add_argument("--output")
     parser.add_argument("--saturation",type=float)
     parser.add_argument("--swap",action="append",nargs=2,type=int)
@@ -410,7 +410,25 @@ def main():
     parser.add_argument("--debug",action="store_true")
     parser.add_argument("--save-qa",action="store_true")
     parser.add_argument("--strict",action="store_true")
+    parser.add_argument("--check-font",action="store_true",
+                        help="不需要六张照片，检查字体族、字重、TTC索引和锁定字号")
     args=parser.parse_args()
+    if args.check_font:
+        cfg={}
+        if args.config:
+            cfg=json.loads(Path(args.config).read_text("utf-8"))
+        path,index=font_file(cfg.get("font_path"))
+        face=ImageFont.truetype(path,CAPTION_FONT_PX,index=index)
+        print(json.dumps(dict(
+            font_family=face.getname()[0],font_weight=face.getname()[1],
+            font_path=path,font_collection_index=index,
+            font_sha256=digest(path),caption_font_px=CAPTION_FONT_PX,
+            number_font_px=NUMBER_FONT_PX,verified=face.getname()==(
+                REQUIRED_FONT_FAMILY,REQUIRED_FONT_WEIGHT)
+        ),ensure_ascii=False,indent=2))
+        return
+    if not args.config:
+        parser.error("制作六联图需要 --config；仅检查字体可使用 --check-font")
     generate(args.config,args)
 
 if __name__=="__main__":
