@@ -40,5 +40,10 @@
       "label": "步骤6"
     }
   ],
-  "subject_y_in_tile": 0.48
+  "subject_y_in_tile": 0.48,
+  "font_family": "Noto Sans CJK SC",
+  "font_weight": "Bold",
+  "font_size_px": 51,
+  "number_font_size_px": 49,
+  "font_path": null
 }
