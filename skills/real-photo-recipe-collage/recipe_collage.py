@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
-VERSION = "2.2-community"
+VERSION = "2.9-auto-final"
 PRESETS = {
     "natural_appetizing_v2": dict(brightness=1.035, contrast=1.055,
                                  saturation=1.155, warmth=.004, sharpness=1.09),
@@ -43,66 +43,83 @@ def read_image(path):
     with Image.open(path) as original:
         return ImageOps.exif_transpose(original).convert("RGB")
 
+
+def _rim_support(edges, cx, cy, r):
+    angles=np.linspace(0,2*np.pi,144,endpoint=False)
+    hits=np.zeros(len(angles),dtype=bool)
+    h,w=edges.shape
+    for shift in (-4,-2,0,2,4):
+        xx=np.rint(cx+(r+shift)*np.cos(angles)).astype(int)
+        yy=np.rint(cy+(r+shift)*np.sin(angles)).astype(int)
+        valid=(xx>=0)&(xx<w)&(yy>=0)&(yy<h)
+        hits[valid] |= edges[yy[valid],xx[valid]]>0
+    return float(hits.mean())
+
 def detect_circle(im, kind="pot"):
-    """Circle geometry is only a candidate, never a semantic ground truth."""
-    w, h = im.size
-    scale = min(1., 640. / w)
-    small = im.resize((round(w * scale), round(h * scale)))
-    gray = cv2.cvtColor(np.asarray(small), cv2.COLOR_RGB2GRAY)
-    gray = cv2.GaussianBlur(gray, (7, 7), 1.8)
-    sw, sh = gray.shape[1], gray.shape[0]
-    rmin = round(sw * (.23 if kind == "plate" else .30))
-    rmax = round(sw * .52)
-    candidates = []
-    for threshold in (48, 41, 34):
-        hits = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1.25,
-                               minDist=.34 * sw, param1=135, param2=threshold,
-                               minRadius=rmin, maxRadius=rmax)
-        if hits is not None:
-            for cx, cy, radius in hits[0]:
-                score = float(radius / sw * 1.8
-                              - abs(cx / sw - .5) * .9
-                              - abs(cy / sh - .51) * .45 + threshold / 1000)
-                candidates.append((score, cx, cy, radius))
-        if candidates:
-            break
-    if not candidates:
-        return dict(ok=False, source="auto_unverified", score=0.,
-                    center=[.5, .52], radius_fraction=.42,
-                    reason="未找到可靠锅盘圆，请手工校准")
-    score, cx, cy, radius = max(candidates, key=lambda item: item[0])
-    return dict(ok=bool(score >= .60 and radius / sw >= .34),
-                source="auto_unverified", score=round(score, 4),
-                center=[round(float(cx / sw), 6), round(float(cy / sh), 6)],
-                radius_fraction=round(float(radius / sw), 6),
-                reason="仅供目视校准")
+    """Multiple observed rim candidates, ranked without asking for manual review."""
+    w,h=im.size
+    scale=min(1.,640./w)
+    small=im.resize((round(w*scale),round(h*scale)))
+    gray=cv2.cvtColor(np.asarray(small),cv2.COLOR_RGB2GRAY)
+    gray=cv2.GaussianBlur(gray,(7,7),1.8)
+    edges=cv2.Canny(gray,55,130)
+    sh,sw=gray.shape
+    rmin=round(sw*(.23 if kind in ("plate","auto") else .27))
+    rmax=round(sw*.53)
+    options=[]
+    for threshold in (52,44,36,28):
+        circles=cv2.HoughCircles(gray,cv2.HOUGH_GRADIENT,dp=1.25,
+             minDist=.30*sw,param1=125,param2=threshold,
+             minRadius=rmin,maxRadius=rmax)
+        if circles is None:continue
+        for cx,cy,r in circles[0]:
+            cx,cy,r=float(cx),float(cy),float(r)
+            if not (.15*sw<cx<.85*sw and .13*sh<cy<.87*sh):continue
+            rim=_rim_support(edges,cx,cy,r)
+            centered=max(0.,1.-np.hypot(cx/sw-.5,cy/sh-.5)/.5)
+            score=.58*rim+.27*min(1.,r/(.42*sw))+.15*centered
+            options.append((score,rim,cx,cy,r))
+    if not options:
+        return dict(ok=False,source="auto_conservative_fallback",score=0.,
+                    center=[.5,.5],radius_fraction=.33,
+                    reason="无可靠圆沿：保守裁剪，完全使用真实原片")
+    score,rim,cx,cy,r=max(options,key=lambda x:x[0])
+    return dict(ok=bool(score>=.49 and rim>=.14),source="auto_measured_rim",
+        score=round(score,4),edge_support=round(rim,4),
+        candidate_count=len(options),
+        center=[round(cx/sw,6),round(cy/sh,6)],
+        radius_fraction=round(r/sw,6),reason="自动候选优化")
 
 def crop_original(im, circle, ratio, framing, target_y):
-    w, h = im.size
-    if not 1 < ratio < 1.6 or not .8 <= framing <= 1:
+    w,h=im.size
+    if not 1<ratio<1.6 or not .8<=framing<=1:
         raise ValueError("面板比例或裁剪放大系数不合理")
-    if not .38 <= target_y <= .50:
-        raise ValueError("subject_y_in_tile 必须在 0.38~0.50 内")
-    cx = float(circle["center"][0]) * w
-    cy = float(circle["center"][1]) * h
-    radius = float(circle["radius_fraction"]) * w
-    cw = min(2 * radius / framing, float(w), 2 * cx, 2 * (w - cx))
-    ch = cw / ratio
-    if ch > h:
-        ch = float(h)
-        cw = ch * ratio
-    left = max(0., min(w - cw, cx - cw / 2))
-    top = max(0., min(h - ch, cy - target_y * ch))
-    rect = [round(left), round(top), round(left + cw), round(top + ch)]
-    image = im.crop(tuple(rect))
-    center_err_x = (cx - (rect[0] + rect[2]) / 2) / image.width
-    center_y = (cy - rect[1]) / image.height
-    return image, rect, dict(center_error_x=round(center_err_x, 5),
-                             center_y=round(center_y, 5),
-                             expected_center_y=target_y,
-                             estimated_rim_width=round(2 * radius / image.width, 5),
-                             source_crop_ratio=round(image.width / image.height, 6),
-                             no_stretch=True)
+    if not .38<=target_y<=.52:
+        raise ValueError("subject_y_in_tile 必须在0.38~0.52")
+    cx=float(circle["center"][0])*w
+    cy=float(circle["center"][1])*h
+    r=float(circle["radius_fraction"])*w
+    # Keep the round rim: its max complete horizontal fill is 1/ratio.
+    cw=min(max(2*r/framing,2*r*ratio*1.025),float(w),float(h)*ratio)
+    ch=cw/ratio
+    left=max(0.,min(w-cw,cx-cw/2))
+    top=max(0.,min(h-ch,cy-target_y*ch))
+    if 2*r<=ch:
+        lo=max(0.,cy+r-ch)
+        hi=min(h-ch,cy-r)
+        if lo<=hi:top=max(lo,min(hi,top))
+    rect=[round(left),round(top),round(left+cw),round(top+ch)]
+    crop=im.crop(tuple(rect))
+    err_x=(cx-(rect[0]+rect[2])/2)/crop.width
+    pos_y=(cy-rect[1])/crop.height
+    rim_cut=max(0.,(rect[0]-cx+r)/(2*r), (cx+r-rect[2])/(2*r),
+                (rect[1]-cy+r)/(2*r),(cy+r-rect[3])/(2*r))
+    return crop,rect,dict(center_error_x=round(err_x,5),
+         center_y=round(pos_y,5),expected_center_y=target_y,
+         estimated_rim_width=round(2*r/crop.width,5),
+         estimated_rim_cut_fraction=round(rim_cut,5),
+         source_crop_ratio=round(crop.width/crop.height,6),
+         no_stretch=True)
 
 def natural_grade(im, settings):
     ranges = {"brightness":(.92,1.12), "contrast":(.92,1.15),
@@ -218,15 +235,15 @@ def generate(config, args):
     for i,(p,im,s,sub) in enumerate(sources):
         x=margin+(i%2)*(pw+gap)
         y=margin+(i//2)*(ph+gap)
-        target_y=float(s.get("subject_y_in_tile",cfg.get("subject_y_in_tile",.445)))
+        target_y=float(s.get("subject_y_in_tile",cfg.get("subject_y_in_tile",.48)))
         crop,rect,geometry=crop_original(im,sub,pw/ph,
                    float(s.get("framing",cfg.get("framing",.975))),target_y)
         flags=[]
         if not sub.get("ok"): flags.append("SUBJECT_UNCONFIRMED")
-        if sub["source"]=="auto_unverified":flags.append("AUTO_NEEDS_VISUAL_CONFIRMATION")
+        if sub["source"]=="auto_conservative_fallback":flags.append("AUTO_FALLBACK_USED")
         if abs(geometry["center_error_x"])>.025:flags.append("CENTER_X_OUT_OF_TARGET")
         if abs(geometry["center_y"]-target_y)>.045:flags.append("CENTER_Y_OUT_OF_TARGET")
-        if geometry["estimated_rim_width"]>1.035:flags.append("POSSIBLE_RIM_CROP")
+        if geometry["estimated_rim_cut_fraction"]>.015:flags.append("POSSIBLE_RIM_CROP")
         if flags:warnings.append({"step":nums[i],"flags":flags})
         local=color.copy()
         local.update(s.get("color_override",{}))
@@ -292,7 +309,7 @@ def generate(config, args):
             v.thumbnail((340,470))
             preview.paste(v,((j%3)*340+(340-v.width)//2,(j//3)*500))
         preview.save(out.with_name(out.stem+"_校准预览.jpg"),quality=90)
-    qa=dict(version=VERSION,status="review_required" if warnings else "pass",
+    qa=dict(version=VERSION,status="auto_warning" if warnings else "auto_complete",
             no_ai_generation=True,no_geometric_warp=True,only_user_originals=True,
             canvas=[ww,hh],panel=[pw,ph],font=fontpath,font_sha256=fhash,
             output_sha256=digest(out),warnings=warnings,steps=manifest)
@@ -303,7 +320,7 @@ def generate(config, args):
     return out,qa
 
 def main():
-    parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v2.2")
+    parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v2.9 自动终稿")
     parser.add_argument("--config",required=True)
     parser.add_argument("--output")
     parser.add_argument("--saturation",type=float)
