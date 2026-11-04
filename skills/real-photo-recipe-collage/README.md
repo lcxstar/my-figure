@@ -33,6 +33,16 @@
 - 字体文件**不上传到 GitHub**。跨电脑若要做到完全相同的字形，可在本地 config.json 设置 `required_font_sha256`，强制精确匹配字体文件版本。
 - 不论新建、改字、交换图片还是调色，都必须通过同一绘制程序重新渲染最终图片。
 
+本地字体自检（不用上传六张照片）:
+
+```bash
+python recipe_collage.py --check-font
+# 使用自定义配置时：
+python recipe_collage.py --config my_dish/config.json --check-font
+```
+
+正常结果应为 `Noto Sans CJK SC`、`Bold`、`font_collection_index=2`（标准 TTC）、`caption_font_px=51`、`number_font_px=49`、`verified=true`。如果没有指定字体，命令将报错而不是替换字体。
+
 ## v2.9 全自动终稿模式
 
 默认运行（只生成六联图 PNG）：
