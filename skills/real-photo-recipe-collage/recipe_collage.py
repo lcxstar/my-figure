@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Real-photo recipe collage, v2.9 auto-final.
+"""Real-photo recipe collage, v3.0 font-locked.
 No generative image editing. Pillow/OpenCV only.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
-VERSION = "2.9-auto-final"
+VERSION = "3.0-font-locked"
 PRESETS = {
     "natural_appetizing_v2": dict(brightness=1.035, contrast=1.055,
                                  saturation=1.155, warmth=.004, sharpness=1.09),
@@ -28,16 +28,46 @@ COLORS = dict(background="#F6F5F0", green="#286B49", cream="#F8F8F0",
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+REQUIRED_FONT_FAMILY = "Noto Sans CJK SC"
+REQUIRED_FONT_WEIGHT = "Bold"
+CAPTION_FONT_PX = 51
+NUMBER_FONT_PX = 49
+
+
 def font_file(provided=None):
-    locations = [provided, "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                 "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-                 "C:/Windows/Fonts/msyhbd.ttc", "C:/Windows/Fonts/msyh.ttc",
-                 "C:/Windows/Fonts/simhei.ttf"]
-    for x in locations:
-        if x and Path(x).is_file():
-            return str(x)
-    raise FileNotFoundError("请在配置 font_path 指定已安装的中文字体")
+    """Select the precise SC Bold face by embedded metadata, no substitution."""
+    defaults = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "C:/Windows/Fonts/NotoSansCJK-Bold.ttc",
+        "/Library/Fonts/NotoSansCJK-Bold.ttc",
+        "/usr/local/share/fonts/NotoSansCJK-Bold.ttc",
+    ]
+    locations = [provided] if provided else defaults
+    for location in locations:
+        if not location:
+            continue
+        p = Path(location)
+        if not p.is_file():
+            continue
+        collection = p.suffix.lower() in (".ttc", ".otc")
+        for index in range(20 if collection else 1):
+            try:
+                face = ImageFont.truetype(str(p), 20, index=index)
+                family, weight = face.getname()
+            except OSError:
+                break
+            if (family, weight) == (REQUIRED_FONT_FAMILY, REQUIRED_FONT_WEIGHT):
+                return str(p), index
+    if provided:
+        raise ValueError(
+            "font_path 不是 Noto Sans CJK SC Bold 简体中文粗体，"
+            "或字体文件不存在；禁止退回其他字体。"
+        )
+    raise FileNotFoundError(
+        "缺少 Noto Sans CJK SC Bold 简体中文粗体。请合法安装 "
+        "NotoSansCJK-Bold.ttc 并在 config.json 中配置 font_path；"
+        "不会自动替换其他字体。"
+    )
 
 def read_image(path):
     with Image.open(path) as original:
@@ -210,7 +240,15 @@ def generate(config, args):
     pw=(ww-2*margin-gap)//2
     ph=(hh-2*margin-2*gap)//3
     if pw<100 or ph<100:raise ValueError("画布尺寸不足")
-    fontpath=font_file(cfg.get("font_path"))
+    if cfg.get("font_family",REQUIRED_FONT_FAMILY)!=REQUIRED_FONT_FAMILY:
+        raise ValueError("六联图字体必须为 Noto Sans CJK SC")
+    if cfg.get("font_weight",REQUIRED_FONT_WEIGHT)!=REQUIRED_FONT_WEIGHT:
+        raise ValueError("六联图字重必须为 Bold")
+    if int(cfg.get("font_size_px",CAPTION_FONT_PX))!=CAPTION_FONT_PX:
+        raise ValueError("六联图步骤标签字号固定为 51px，禁止逐次缩放")
+    if int(cfg.get("number_font_size_px",NUMBER_FONT_PX))!=NUMBER_FONT_PX:
+        raise ValueError("六联图编号字号固定为 49px")
+    fontpath,fontindex=font_file(cfg.get("font_path"))
     fhash=digest(fontpath)
     if cfg.get("required_font_sha256") and cfg["required_font_sha256"]!=fhash:
         raise ValueError("字体SHA256不匹配")
@@ -243,15 +281,23 @@ def generate(config, args):
         else:
             sub=auto
         sources.append((p,im,s,sub))
-    # One font size for all six, determined by the longest caption.
-    fsize=round(pw*.069)
-    while fsize>14:
-        capfont=ImageFont.truetype(fontpath,fsize)
-        if max(canvas.textbbox((0,0),str(s["label"]),font=capfont)[2] for s in steps) < pw*.75:
-            break
-        fsize-=1
-    capfont=ImageFont.truetype(fontpath,fsize)
-    numfont=ImageFont.truetype(fontpath,round(ph*.074))
+    # One exact font and size for all six. Never silently resize labels.
+    fsize=CAPTION_FONT_PX
+    capfont=ImageFont.truetype(fontpath,fsize,index=fontindex)
+    numfont=ImageFont.truetype(fontpath,NUMBER_FONT_PX,index=fontindex)
+    if capfont.getname()!=(REQUIRED_FONT_FAMILY,REQUIRED_FONT_WEIGHT):
+        raise RuntimeError("步骤文字字体身份校验失败")
+    if numfont.getname()!=(REQUIRED_FONT_FAMILY,REQUIRED_FONT_WEIGHT):
+        raise RuntimeError("数字字体身份校验失败")
+    max_label_width=int(pw*.84-pw*.092)
+    for s in steps:
+        label=str(s["label"])
+        bounds=canvas.textbbox((0,0),label,font=capfont)
+        if bounds[2]-bounds[0]>max_label_width:
+            raise ValueError(
+                f"步骤 {s['number']} 的文字过长：{label!r}；"
+                "请缩短文案，不能自动减小字号或换字体。"
+            )
     manifest=[]
     warnings=[]
     debug=[]
@@ -285,7 +331,8 @@ def generate(config, args):
         th=round(ph*.149)
         ty=y+ph-th-round(ph*.028)
         label=str(s["label"])
-        textw=canvas.textbbox((0,0),label,font=capfont)[2]
+        bounds=canvas.textbbox((0,0),label,font=capfont)
+        textw=bounds[2]-bounds[0]
         tw=round(max(pw*.53,min(pw*.84,textw+pw*.092)))
         tx=x+(pw-tw)//2
         canvas.rounded_rectangle((tx,ty,tx+tw,ty+th),radius=th//2,fill=palette["cream"])
@@ -302,7 +349,9 @@ def generate(config, args):
         manifest.append(dict(step=nums[i],label=label,source=p.name,
                    source_sha256=digest(p),subject=sub,crop_px=rect,
                    geometry=geometry,caption_rect=[tx,ty,tx+tw,ty+th],
-                   caption_font_px=fsize,color=local,flags=flags))
+                   caption_font_px=fsize,number_font_px=NUMBER_FONT_PX,
+                   font_family=REQUIRED_FONT_FAMILY,font_weight=REQUIRED_FONT_WEIGHT,
+                   font_collection_index=fontindex,color=local,flags=flags))
         if getattr(args,"debug",False):
             v=im.copy()
             dd=ImageDraw.Draw(v)
@@ -335,6 +384,9 @@ def generate(config, args):
     qa=dict(version=VERSION,status="auto_warning" if warnings else "auto_complete",
             no_ai_generation=True,no_geometric_warp=True,only_user_originals=True,
             canvas=[ww,hh],panel=[pw,ph],font=fontpath,font_sha256=fhash,
+            font_family=REQUIRED_FONT_FAMILY,font_weight=REQUIRED_FONT_WEIGHT,
+            font_collection_index=fontindex,caption_font_px=fsize,
+            number_font_px=NUMBER_FONT_PX,
             output_sha256=digest(out),warnings=warnings,steps=manifest)
     # Compute QA internally; only the final collage is produced by default.
     # Diagnostic JSON and annotated previews are opt-in, not user checkpoints.
@@ -346,7 +398,7 @@ def generate(config, args):
     return out,qa
 
 def main():
-    parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v2.9 自动终稿")
+    parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v3.0 固定字体自动终稿")
     parser.add_argument("--config",required=True)
     parser.add_argument("--output")
     parser.add_argument("--saturation",type=float)
