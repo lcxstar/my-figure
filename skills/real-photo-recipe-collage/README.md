@@ -14,7 +14,7 @@
 安装 Python 3.10+、中文字体（建议本机安装 Noto Sans CJK Bold）和 requirements.txt 中的依赖。把六张原片放入独立 originals/ 文件夹，复制 examples/config.template.json 为自己的 config.json，填写照片路径和步骤文字。运行：
 
     python -m pip install -r requirements.txt
-    python recipe_collage.py --config my_dish/config.json --debug
+    python recipe_collage.py --config my_dish/config.json --output my_dish/六联图.png
 
 首次使用**无需人工校准**；程序通过多组锅盘候选和边缘支持度自动选择安全裁剪，完成调色和固定样式后直接输出最终图片。若用户后来发现某格偏移，再定向调整该格的 `subject.center` 与 `radius_fraction`，不用重做其他五格。
 
