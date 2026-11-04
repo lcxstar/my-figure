@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Real-photo recipe collage, v2.2 community edition.
+"""Real-photo recipe collage, v2.9 auto-final.
 No generative image editing. Pillow/OpenCV only.
 """
 from __future__ import annotations
