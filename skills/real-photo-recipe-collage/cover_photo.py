@@ -11,13 +11,13 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 import cv2
 import math
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 LIMITS = {"brightness":(.90,1.10),"contrast":(.90,1.10),
           "saturation":(.88,1.12),"sharpness":(.88,1.12)}
 DEFAULT_COLORS = {"brightness":1.035,"contrast":1.035,
                   "saturation":1.045,"sharpness":1.035}
 DEFAULT_BACKGROUND = {"mode":"linen_botanical","base_color":"#D0D0CB",
-                      "texture_strength":1.0,"pattern_opacity":0.18}
+                      "texture_strength":1.0,"pattern_opacity":0.34}
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -161,45 +161,72 @@ def rgb(code):
     except ValueError as exc: raise ValueError("背景颜色无效") from exc
 
 def botanical_background(size, options):
-    """Reproducible gray-linen approximation with very faint printed corner leaves.
-    The texture and print are background-only and never redraw the source subject.
-    """
+    """Deterministic neutral linen with soft natural leaf sprigs. Background only."""
     w,h=size
-    base_color=options.get("base_color","#D0D0CB")
+    base_color=options.get("base_color","#D8D4D0")
     base=np.asarray(rgb(base_color),dtype=np.float32)
     texture=float(options.get("texture_strength",1.0))
-    opacity=float(options.get("pattern_opacity",.18))
-    if not (0 <= texture <= 1.8 and 0 <= opacity <= .32):
+    opacity=float(options.get("pattern_opacity",.34))
+    if not (0<=texture<=1.8 and 0<=opacity<=.70):
         raise ValueError("桌布纹理强度或植物纹透明度超出允许范围")
-    rng=np.random.default_rng(20261102)
-    yy,xx=np.ogrid[:h,:w]
-    weave=.75*np.sin(xx*.84)+.65*np.sin(yy*.81)
-    noise=rng.normal(0,1.15,(h,w))
-    arr=np.clip(base[None,None,:]+((weave+noise)*texture)[:,:,None],0,255).astype(np.uint8)
-    bg=Image.fromarray(arr,"RGB")
-    if opacity:
-        print_layer=Image.new("RGBA",size,(0,0,0,0))
-        draw=ImageDraw.Draw(print_layer)
-        for corner in ("TL","TR","BL","BR"):
-            sx=-1 if corner in ("TR","BR") else 1
-            sy=-1 if corner in ("BL","BR") else 1
-            bx=w-1 if sx<0 else 0
-            by=h-1 if sy<0 else 0
-            def at(x,y): return (round(bx+sx*x*w),round(by+sy*y*h))
-            color=(94,111,99,round(44*opacity))
-            draw.line([at(.018,.030),at(.037,.083),at(.067,.120),
-                       at(.097,.166),at(.130,.207)],
-                      fill=color,width=max(1,round(w*.002)))
-            for x,y,side in ((.040,.085,-1),(.057,.112,1),(.079,.140,-1),
-                             (.101,.171,1),(.120,.190,-1)):
-                draw.polygon([at(x,y),at(x+side*.028,y-.014),
-                              at(x+side*.011,y+.014)],fill=color)
-        print_layer=print_layer.filter(ImageFilter.GaussianBlur(.6))
-        bg=Image.alpha_composite(bg.convert("RGBA"),print_layer).convert("RGB")
-    return bg,{"mode":"linen_botanical","base_color":base_color,
-               "texture_strength":texture,"pattern_opacity":opacity,
-               "seed":20261102,
-               "note":"为可复现的浅灰植物纹桌布模拟；真实桌布可用 background.mode=image"}
+    rng=np.random.default_rng(20261104)
+    lowres=rng.normal(0,1,(max(10,h//40),max(10,w//40))).astype(np.float32)
+    low=cv2.resize(lowres,(w,h),interpolation=cv2.INTER_CUBIC)
+    grain=rng.normal(0,.72,(h,w)).astype(np.float32)
+    arr=np.uint8(np.clip(base[None,None,:]+(1.15*low+grain)[:,:,None]*texture,0,255))
+    bg=Image.fromarray(arr,"RGB").convert("RGBA")
+    ink=Image.new("RGBA",(w,h),(0,0,0,0))
+    draw=ImageDraw.Draw(ink)
+    stems=[
+        [(-.02,.255),(.025,.175),(.068,.120),(.14,.055),(.22,-.015)],
+        [(.95,-.03),(.995,.055),(1.01,.115),(.92,.155),(.81,.205)],
+        [(-.04,.76),(.02,.775),(.06,.83),(.11,.905),(.20,.99)],
+        [(1.025,.80),(.97,.86),(.94,.90),(.87,.955),(.80,1.03)],
+        [(.36,-.04),(.25,.01),(.19,.047),(.13,.095)],
+    ]
+    def at(a):
+        return (round(a[0]*w),round(a[1]*h))
+    def bezier(points,t):
+        v=np.array(points,float)
+        for _ in range(len(points)-1):
+            v=(1-t)*v[:-1]+t*v[1:]
+        return v[0]
+    stem_rgba=(115,136,110,round(opacity*255*.44))
+    leaf_rgba=(127,143,117,round(opacity*255*.53))
+    for index,controls in enumerate(stems):
+        curve=[at(bezier(controls,float(t))) for t in np.linspace(0,1,120)]
+        draw.line(curve,fill=stem_rgba,width=max(2,round(w*.0018)),joint="curve")
+        for j,t in enumerate(np.linspace(.10,.92,8)):
+            q=bezier(controls,float(t))
+            before=bezier(controls,max(0,float(t)-.02))
+            after=bezier(controls,min(1,float(t)+.02))
+            tangent=(after-before)*np.array([w,h])
+            tangent=tangent/max(1,np.linalg.norm(tangent))
+            perp=np.array([-tangent[1],tangent[0]])
+            origin=np.asarray(at(q),float)
+            side=1 if (j+index)%2 else -1
+            length=(24+11*(1-float(t)))*(1+.15*math.sin(j+index))
+            direction=(perp*side+tangent*.37)
+            direction=direction/np.linalg.norm(direction)
+            start=origin+direction*length*.28
+            tip=origin+direction*length
+            draw.line([tuple(origin),tuple(start)],fill=stem_rgba,width=1)
+            axis=(tip-start)/np.linalg.norm(tip-start)
+            transverse=np.array([-axis[1],axis[0]])
+            half_width=4.4+1.5*math.cos(j+index)
+            boundary=[]
+            for sign in (1,-1):
+                ts=np.linspace(0,1,10) if sign==1 else np.linspace(1,0,10)
+                for u in ts:
+                    pt=start+(tip-start)*u+transverse*(sign*half_width*math.sin(math.pi*u)**.78)
+                    boundary.append(tuple(np.round(pt).astype(int)))
+            draw.polygon(boundary,fill=leaf_rgba)
+    ink=ink.filter(ImageFilter.GaussianBlur(max(1.5,w/520)))
+    result=Image.alpha_composite(bg,ink).convert("RGB")
+    return result,{"mode":"linen_botanical","base_color":base_color,
+                   "texture_strength":texture,"pattern_opacity":opacity,
+                   "seed":20261104,
+                   "note":"程序生成的柔和植物布纹；若要照片级质感，应使用 background.mode=image 及无菜品的真实布料底图"}
 
 def make_background(size,settings,parent):
     """Supports old solid-color configs, a deterministic linen design, or a real cloth photo."""
