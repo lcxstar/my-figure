@@ -1,7 +1,7 @@
 {
   "recipe": "示例菜谱",
   "preset": "natural_appetizing_v2",
-  "subject_type": "pot",
+  "subject_type": "auto",
   "width": 1500,
   "height": 2000,
   "margin": 5,
@@ -39,5 +39,6 @@
       "number": "06",
       "label": "步骤6"
     }
-  ]
+  ],
+  "subject_y_in_tile": 0.48
 }
