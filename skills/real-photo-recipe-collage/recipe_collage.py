@@ -336,10 +336,13 @@ def generate(config, args):
             no_ai_generation=True,no_geometric_warp=True,only_user_originals=True,
             canvas=[ww,hh],panel=[pw,ph],font=fontpath,font_sha256=fhash,
             output_sha256=digest(out),warnings=warnings,steps=manifest)
-    qa_file=out.with_name(out.stem+"_QA.json")
-    qa_file.write_text(json.dumps(qa,ensure_ascii=False,indent=2),"utf-8")
+    # Compute QA internally; only the final collage is produced by default.
+    # Diagnostic JSON and annotated previews are opt-in, not user checkpoints.
+    if getattr(args,"debug",False) or getattr(args,"save_qa",False):
+        qa_file=out.with_name(out.stem+"_QA.json")
+        qa_file.write_text(json.dumps(qa,ensure_ascii=False,indent=2),"utf-8")
+        print("校验:",qa_file,qa["status"])
     print("成品:",out)
-    print("校验:",qa_file,qa["status"])
     return out,qa
 
 def main():
@@ -353,6 +356,7 @@ def main():
     parser.add_argument("--save-config")
     parser.add_argument("--make-calibration",action="store_true")
     parser.add_argument("--debug",action="store_true")
+    parser.add_argument("--save-qa",action="store_true")
     parser.add_argument("--strict",action="store_true")
     args=parser.parse_args()
     generate(args.config,args)
