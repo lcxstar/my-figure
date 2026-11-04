@@ -44,51 +44,74 @@ def read_image(path):
         return ImageOps.exif_transpose(original).convert("RGB")
 
 
-def _rim_support(edges, cx, cy, r):
-    angles=np.linspace(0,2*np.pi,144,endpoint=False)
-    hits=np.zeros(len(angles),dtype=bool)
-    h,w=edges.shape
-    for shift in (-4,-2,0,2,4):
-        xx=np.rint(cx+(r+shift)*np.cos(angles)).astype(int)
-        yy=np.rint(cy+(r+shift)*np.sin(angles)).astype(int)
-        valid=(xx>=0)&(xx<w)&(yy>=0)&(yy<h)
-        hits[valid] |= edges[yy[valid],xx[valid]]>0
-    return float(hits.mean())
+def detect_circle(im, kind="auto"):
+    """Auto-search observed outer rims by radial image contrast, not Hough alone."""
+    w, h = im.size
+    sw = min(640, w)
+    sh = max(1, round(h * sw / w))
+    photo = np.asarray(im.resize((sw, sh)))
+    gray = cv2.cvtColor(photo, cv2.COLOR_RGB2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 2.1)
+    theta = np.linspace(0, 2 * np.pi, 120, endpoint=False)
+    cs, ss = np.cos(theta), np.sin(theta)
+    centers_x = np.arange(.36, .671, .025)
+    centers_y = np.arange(.35, .731, .025)
+    radii = np.arange(.27, .531, .016)
+    aspect = np.arange(.79, 1.021, .06)
+    grid = np.stack(np.meshgrid(centers_x, centers_y, radii,
+                                aspect, indexing="ij"), axis=-1).reshape(-1, 4)
+    cx = grid[:, 0] * sw
+    cy = grid[:, 1] * sh
+    rx = grid[:, 2] * sw
+    ry = grid[:, 3] * rx
+    scores = np.zeros(len(grid), dtype=float)
+    batch_size = 1000
+    for i in range(0, len(grid), batch_size):
+        sl = slice(i, min(i + batch_size, len(grid)))
+        xi = np.rint(cx[sl, None] + (rx[sl, None] - 8) * cs).astype(int)
+        yi = np.rint(cy[sl, None] + (ry[sl, None] - 8) * ss).astype(int)
+        xo = np.rint(cx[sl, None] + (rx[sl, None] + 8) * cs).astype(int)
+        yo = np.rint(cy[sl, None] + (ry[sl, None] + 8) * ss).astype(int)
+        valid = ((xi >= 0) & (xi < sw) & (xo >= 0) & (xo < sw)
+                 & (yi >= 0) & (yi < sh) & (yo >= 0) & (yo < sh))
+        xi = np.clip(xi, 0, sw - 1)
+        xo = np.clip(xo, 0, sw - 1)
+        yi = np.clip(yi, 0, sh - 1)
+        yo = np.clip(yo, 0, sh - 1)
+        diff = np.abs(gray[yi, xi].astype(float)
+                      - gray[yo, xo].astype(float))
+        diff[~valid] = 0
+        strength = np.minimum(diff, 75) / 75
+        support = diff > 22
+        sectors = support.reshape(-1, 12, 10).any(axis=2).mean(axis=1)
+        scores[sl] = (.63 * strength.mean(axis=1)
+                      + .25 * support.mean(axis=1) + .12 * sectors)
+        scores[sl] -= .5 * (1 - valid.mean(axis=1))
+    scores += (.04 * np.minimum(1., grid[:, 2] / .42)
+               - .08 * np.hypot(grid[:, 0] - .50, grid[:, 1] - .52))
+    top = int(np.argmax(scores))
+    # A bright food/rim interior may look stronger than the real outer rim.
+    # When a comparably supported, larger ellipse is nearby, prefer its edge.
+    larger = np.where(
+        (scores >= scores[top] - .11)
+        & (grid[:, 2] > grid[top, 2] + .045)
+        & (grid[:, 2] <= .49)
+        & (np.abs(grid[:, 0] - grid[top, 0]) < .09)
+        & (np.abs(grid[:, 1] - grid[top, 1]) < .09)
+    )[0]
+    if len(larger):
+        top = int(larger[np.argmax(scores[larger])])
+    score = float(scores[top])
+    x, y, radius, ellipse_aspect = (float(v) for v in grid[top])
+    return dict(
+        ok=score >= .55, source="auto_radial_outer_rim",
+        score=round(score, 4), candidate_count=len(grid),
+        center=[round(x, 6), round(y, 6)],
+        radius_fraction=round(radius, 6),
+        ellipse_aspect_yx=round(ellipse_aspect, 4),
+        reason="原图边缘的多尺度椭圆搜索；未经人工逐格复核"
+    )
 
-def detect_circle(im, kind="pot"):
-    """Multiple observed rim candidates, ranked without asking for manual review."""
-    w,h=im.size
-    scale=min(1.,640./w)
-    small=im.resize((round(w*scale),round(h*scale)))
-    gray=cv2.cvtColor(np.asarray(small),cv2.COLOR_RGB2GRAY)
-    gray=cv2.GaussianBlur(gray,(7,7),1.8)
-    edges=cv2.Canny(gray,55,130)
-    sh,sw=gray.shape
-    rmin=round(sw*(.23 if kind in ("plate","auto") else .27))
-    rmax=round(sw*.53)
-    options=[]
-    for threshold in (52,44,36,28):
-        circles=cv2.HoughCircles(gray,cv2.HOUGH_GRADIENT,dp=1.25,
-             minDist=.30*sw,param1=125,param2=threshold,
-             minRadius=rmin,maxRadius=rmax)
-        if circles is None:continue
-        for cx,cy,r in circles[0]:
-            cx,cy,r=float(cx),float(cy),float(r)
-            if not (.15*sw<cx<.85*sw and .13*sh<cy<.87*sh):continue
-            rim=_rim_support(edges,cx,cy,r)
-            centered=max(0.,1.-np.hypot(cx/sw-.5,cy/sh-.5)/.5)
-            score=.58*rim+.27*min(1.,r/(.42*sw))+.15*centered
-            options.append((score,rim,cx,cy,r))
-    if not options:
-        return dict(ok=False,source="auto_conservative_fallback",score=0.,
-                    center=[.5,.5],radius_fraction=.33,
-                    reason="无可靠圆沿：保守裁剪，完全使用真实原片")
-    score,rim,cx,cy,r=max(options,key=lambda x:x[0])
-    return dict(ok=bool(score>=.49 and rim>=.14),source="auto_measured_rim",
-        score=round(score,4),edge_support=round(rim,4),
-        candidate_count=len(options),
-        center=[round(cx/sw,6),round(cy/sh,6)],
-        radius_fraction=round(r/sw,6),reason="自动候选优化")
 
 def crop_original(im, circle, ratio, framing, target_y):
     w,h=im.size
@@ -240,7 +263,7 @@ def generate(config, args):
                    float(s.get("framing",cfg.get("framing",.975))),target_y)
         flags=[]
         if not sub.get("ok"): flags.append("SUBJECT_UNCONFIRMED")
-        if sub["source"]=="auto_conservative_fallback":flags.append("AUTO_FALLBACK_USED")
+        if sub["source"]=="auto_radial_outer_rim" and not sub.get("ok"):flags.append("LOW_RIM_CONFIDENCE")
         if abs(geometry["center_error_x"])>.025:flags.append("CENTER_X_OUT_OF_TARGET")
         if abs(geometry["center_y"]-target_y)>.045:flags.append("CENTER_Y_OUT_OF_TARGET")
         if geometry["estimated_rim_cut_fraction"]>.015:flags.append("POSSIBLE_RIM_CROP")
