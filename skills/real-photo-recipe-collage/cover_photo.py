@@ -16,7 +16,7 @@ LIMITS = {"brightness":(.90,1.10),"contrast":(.90,1.10),
           "saturation":(.88,1.12),"sharpness":(.88,1.12)}
 DEFAULT_COLORS = {"brightness":1.035,"contrast":1.035,
                   "saturation":1.045,"sharpness":1.035}
-DEFAULT_BACKGROUND = {"mode":"linen_botanical","base_color":"#D0D0CB",
+DEFAULT_BACKGROUND = {"mode":"linen_botanical","base_color":"#D8D4D0",
                       "texture_strength":1.0,"pattern_opacity":0.34}
 
 def digest(path):
