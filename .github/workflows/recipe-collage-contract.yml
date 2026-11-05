@@ -1,0 +1,35 @@
+name: Recipe collage source-lock and typography tests
+
+on:
+  push:
+    paths:
+      - 'skills/real-photo-recipe-collage/**'
+      - '.github/workflows/recipe-collage-contract.yml'
+  pull_request:
+    paths:
+      - 'skills/real-photo-recipe-collage/**'
+      - '.github/workflows/recipe-collage-contract.yml'
+
+jobs:
+  verify-recipe-collage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/real-photo-recipe-collage
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install matching Chinese bold font
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile and run tests
+        run: |
+          python -m py_compile recipe_collage.py
+          python -m unittest discover -s tests -p 'test_*.py' -v
