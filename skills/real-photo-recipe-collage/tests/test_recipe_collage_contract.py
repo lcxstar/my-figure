@@ -114,7 +114,7 @@ class RecipeCollageContractTests(unittest.TestCase):
         self.assertEqual(qa2["font_sha256"], qa1["font_sha256"])
         with Image.open(p1) as a, Image.open(p2) as b:
             # Center of first step number and the center of caption background.
-            for xy in ((72, 63), (250, 415), (400, 415)):
+            for xy in ((72, 63), (250, 590), (400, 590)):
                 self.assertEqual(a.getpixel(xy), b.getpixel(xy))
 
 
