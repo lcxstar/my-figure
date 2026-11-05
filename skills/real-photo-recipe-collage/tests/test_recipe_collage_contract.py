@@ -51,6 +51,22 @@ class RecipeCollageContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SHA256"):
             recipe.validate_source_mapping(data, data["steps"], locked.parent)
 
+    def test_lock_requires_human_assigned_photo_role(self):
+        self.steps[4].pop("role")
+        self.save_config()
+        with self.assertRaisesRegex(ValueError, "role"):
+            recipe.write_locked_config(self.config_path)
+
+    def test_swapping_images_also_swaps_source_hash_and_role(self):
+        locked = recipe.write_locked_config(self.config_path)
+        data = json.loads(locked.read_text("utf-8"))
+        args = argparse.Namespace(swap=[(1, 3)], set_label=None,
+                                  set_step_saturation=None)
+        updated = recipe.modify(data, args)
+        recipe.validate_source_mapping(updated, updated["steps"], locked.parent)
+        self.assertEqual(updated["steps"][0]["role"], "第3步的实际照片")
+        self.assertEqual(updated["steps"][2]["role"], "第1步的实际照片")
+
     def test_duplicate_and_nonsequential_files_rejected(self):
         self.steps[2]["file"] = self.steps[1]["file"]
         with self.assertRaisesRegex(ValueError, "重复"):
