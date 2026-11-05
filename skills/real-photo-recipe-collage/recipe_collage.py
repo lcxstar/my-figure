@@ -264,7 +264,7 @@ def modify(cfg, args):
         s,t = cfg["steps"][a-1],cfg["steps"][b-1]
         s["file"],t["file"]=t["file"],s["file"]
         for key in ("subject","framing","subject_y_in_tile","color_override",
-                    "approved_source_sha256"):
+                    "approved_source_sha256","expected_source_sha256","role"):
             sv,tv=s.pop(key,None),t.pop(key,None)
             if tv is not None: s[key]=tv
             if sv is not None: t[key]=sv
