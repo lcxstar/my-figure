@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Deterministic cover photo: original pixels only; no inpainting or generative redraw."""
+"""STRICT original-pixel cover only: 2D compositing cannot reconstruct physical table contact for a handheld plate."""
 from __future__ import annotations
 import argparse
 import hashlib
@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 import cv2
 import math
 
-VERSION = "2.7.0"
+VERSION = "2.7.1-strict-flat-composite"
 LIMITS = {"brightness":(.90,1.10),"contrast":(.90,1.10),
           "saturation":(.88,1.12),"sharpness":(.88,1.12)}
 DEFAULT_COLORS = {"brightness":1.035,"contrast":1.035,
@@ -289,6 +289,7 @@ def render(config):
     fg.putalpha(mask.crop(bbox))
     fg=fg.resize(size,Image.Resampling.LANCZOS)
     output,bg_meta=make_background((cw,ch),data.get("background"),config.parent)
+    # Flat alpha shadow only: not proof of physical tabletop contact.
     shadow_strength=float(data.get("contact_shadow",.10))
     if not 0 <= shadow_strength <= .20:
         raise ValueError("contact_shadow 超出保真范围")
@@ -316,7 +317,10 @@ def render(config):
         "center_px":center_px,"center_target_px":center_target_px,
         "center_error_px":[center_px[0]-center_target_px[0],center_px[1]-center_target_px[1]],
         "contact_shadow":shadow_strength,
-        "note":"必须目视确认真实蒙版贴合盘沿、手部移除、碗盘居中、轻调色；遮挡盘沿处禁止凭空修复。"}
+        "scene_grounding_verified":False,
+        "lighting_color_consistency_verified":False,
+        "scene_compositing_limit":"2D silhouette shadow cannot create real tabletop contact for a handheld plate.",
+        "note":"本脚本仅为原片二维抠图。手托盘转为落桌场景时，必须额外目视检查浮空感、色温差和投影；无法可信落桌时使用 hybrid_natural_cover 图像编辑。"}
     # Diagnostic overlay is generated from the unmodified original and excluded from final cover.
     preview=original.copy()
     d=ImageDraw.Draw(preview)
