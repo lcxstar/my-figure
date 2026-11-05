@@ -1,0 +1,55 @@
+{
+  "width": 1500,
+  "height": 2000,
+  "margin": 5,
+  "gap": 10,
+  "corner_radius": 14,
+  "preset": "natural_appetizing_v4",
+  "require_source_sha256": false,
+  "framing": 0.975,
+  "subject_y_in_tile": 0.48,
+  "font_family": "Noto Sans CJK SC",
+  "font_weight": "Bold",
+  "font_size_px": 51,
+  "number_font_size_px": 49,
+  "accent_rays": true,
+  "output": "../../output/recipe_six_panel.png",
+  "steps": [
+    {
+      "number": "01",
+      "file": "../../input/step_01.jpg",
+      "label": "准备食材",
+      "role": "准备食材"
+    },
+    {
+      "number": "02",
+      "file": "../../input/step_02.jpg",
+      "label": "食材处理",
+      "role": "食材处理"
+    },
+    {
+      "number": "03",
+      "file": "../../input/step_03.jpg",
+      "label": "开始煸炒",
+      "role": "开始煸炒"
+    },
+    {
+      "number": "04",
+      "file": "../../input/step_04.jpg",
+      "label": "加入调味",
+      "role": "加入调味"
+    },
+    {
+      "number": "05",
+      "file": "../../input/step_05.jpg",
+      "label": "继续焖煮",
+      "role": "继续焖煮"
+    },
+    {
+      "number": "06",
+      "file": "../../input/step_06.jpg",
+      "label": "完成出锅",
+      "role": "完成出锅"
+    }
+  ]
+}
