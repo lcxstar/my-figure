@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 import cv2
 import math
 
-VERSION = "2.7.1-strict-flat-composite"
+VERSION = "2.8.0-strict-final-ratio-verified"
 LIMITS = {"brightness":(.90,1.10),"contrast":(.90,1.10),
           "saturation":(.88,1.12),"sharpness":(.88,1.12)}
 DEFAULT_COLORS = {"brightness":1.035,"contrast":1.035,
@@ -265,8 +265,8 @@ def render(config):
     canvas=list(map(int,data.get("canvas",[1200,1600])))
     cw,ch=canvas
     if cw*4!=ch*3: raise ValueError("封面比例必须是 3:4")
-    fraction=float(data.get("subject_width_fraction",.86))
-    if not .65<=fraction<=.92: raise ValueError("主体宽度比例不合理")
+    fraction=float(data.get("subject_width_fraction",.90))
+    if not .65<=fraction<=.94: raise ValueError("主体宽度比例不合理")
     center=pair(data.get("subject_center_on_canvas",[.5,.5]),"subject_center_on_canvas")
     factor=min(cw*fraction/(right-left), ch*.92/(bottom-top))
     size=(max(1,round((right-left)*factor)),max(1,round((bottom-top)*factor)))
@@ -305,6 +305,24 @@ def render(config):
     out=resolve(config.parent,data.get("output","output/封面图.png"))
     out.parent.mkdir(parents=True,exist_ok=True)
     output.save(out)
+    # Final-file validation: the requested canvas setting is not a sufficient proof.
+    # Reopen the actual exported image rather than trusting the config value.
+    with Image.open(out) as saved:
+        saved.load()
+        actual_size=list(saved.size)
+        actual_format=saved.format
+    ratio_verified=(actual_size[0]*4==actual_size[1]*3 and
+                    actual_size[0]<actual_size[1] and actual_format=="PNG")
+    if not ratio_verified:
+        out.unlink(missing_ok=True)
+        raise RuntimeError("封面实际导出不是严格 3:4 PNG；已拒绝交付")
+    margin_px=dict(left=x,right=cw-(x+size[0]),top=y,bottom=ch-(y+size[1]))
+    margin_fraction={key:round(v/(cw if key in ("left","right") else ch),5)
+                     for key,v in margin_px.items()}
+    if any(v<=0 for v in margin_px.values()) or min(
+         margin_fraction["left"],margin_fraction["right"])<.03:
+        out.unlink(missing_ok=True)
+        raise RuntimeError("主体触边或左右安全边距小于 3%，已拒绝交付")
     center_px=[x+size[0]/2,y+size[1]/2]
     center_target_px=[cw*center[0],ch*center[1]]
     qa={"version":VERSION,"status":"review_required",
@@ -313,7 +331,13 @@ def render(config):
         "generative_redraw":False,"hand_removal_verified":False,
         "mask":mask_meta,"source_bbox_px":list(bbox),
         "subject_bbox_canvas_px":[x,y,x+size[0],y+size[1]],
-        "canvas":canvas,"background":bg_meta,"color":color,
+        "canvas":canvas,"actual_export_size":actual_size,
+        "actual_export_format":actual_format,
+        "final_aspect_ratio_verified":ratio_verified,
+        "subject_bbox_margin_px":margin_px,
+        "subject_bbox_margin_fraction":margin_fraction,
+        "subject_geometry_check":"bbox margin only; not proof of intact 360-degree rim",
+        "background":bg_meta,"color":color,
         "center_px":center_px,"center_target_px":center_target_px,
         "center_error_px":[center_px[0]-center_target_px[0],center_px[1]-center_target_px[1]],
         "contact_shadow":shadow_strength,
