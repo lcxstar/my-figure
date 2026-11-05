@@ -15,12 +15,15 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
-VERSION = "3.0-font-locked"
+VERSION = "3.2-color-first-font-locked"
 PRESETS = {
     "natural_appetizing_v2": dict(brightness=1.035, contrast=1.055,
                                  saturation=1.155, warmth=.004, sharpness=1.09),
     "neutral_documentary_v2": dict(brightness=1.025, contrast=1.035,
                                    saturation=1.065, warmth=0, sharpness=1.065),
+    # v3: appetizing yet restrained; applies only to original PHOTOS before typography.
+    "natural_appetizing_v3": dict(brightness=1.040, contrast=1.080,
+                                 saturation=1.165, warmth=.007, sharpness=1.095),
 }
 COLORS = dict(background="#F6F5F0", green="#286B49", cream="#F8F8F0",
               ink="#214A36", yellow="#FFD455")
@@ -252,7 +255,7 @@ def generate(config, args):
     fhash=digest(fontpath)
     if cfg.get("required_font_sha256") and cfg["required_font_sha256"]!=fhash:
         raise ValueError("字体SHA256不匹配")
-    preset=cfg.get("preset","natural_appetizing_v2")
+    preset=cfg.get("preset","natural_appetizing_v3")
     if preset not in PRESETS: raise ValueError("未知预设")
     color=PRESETS[preset].copy()
     color.update(cfg.get("color_override",{}))
@@ -281,6 +284,8 @@ def generate(config, args):
         else:
             sub=auto
         sources.append((p,im,s,sub))
+    # Color is applied to cropped original photos, and all labels/numbers are drawn only afterwards.
+    # Do not run generative editing or color filters over the already labeled collage.
     # One exact font and size for all six. Never silently resize labels.
     fsize=CAPTION_FONT_PX
     capfont=ImageFont.truetype(fontpath,fsize,index=fontindex)
@@ -381,7 +386,7 @@ def generate(config, args):
             v.thumbnail((340,470))
             preview.paste(v,((j%3)*340+(340-v.width)//2,(j//3)*500))
         preview.save(out.with_name(out.stem+"_校准预览.jpg"),quality=90)
-    qa=dict(version=VERSION,status="auto_warning" if warnings else "auto_complete",
+    qa=dict(version=VERSION,color_applied_before_typography=True,status="auto_warning" if warnings else "auto_complete",
             no_ai_generation=True,no_geometric_warp=True,only_user_originals=True,
             canvas=[ww,hh],panel=[pw,ph],font=fontpath,font_sha256=fhash,
             font_family=REQUIRED_FONT_FAMILY,font_weight=REQUIRED_FONT_WEIGHT,
