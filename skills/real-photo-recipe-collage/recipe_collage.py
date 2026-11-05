@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Real-photo recipe collage, v3.0 font-locked.
+"""Real-photo recipe collage v3.4: locked source mapping, photo-first grading, typography-last.
 No generative image editing. Pillow/OpenCV only.
 """
 from __future__ import annotations
@@ -242,6 +242,9 @@ def write_locked_config(config_path, output_path=None):
     # Validate original paths before locking, but do not require pre-existing hashes.
     verify=dict(data,require_source_sha256=False)
     source_info=validate_source_mapping(verify,steps,config_path.parent)
+    for i,source in enumerate(source_info,1):
+        if not source["role"]:
+            raise ValueError(f"第{i}格缺少 role，请先描述照片代表的烹饪步骤再锁定")
     for step,source in zip(steps,source_info):
         step["expected_source_sha256"]=source["sha256"]
     data["require_source_sha256"]=True
