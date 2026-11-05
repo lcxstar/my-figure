@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
-VERSION = "3.2-color-first-font-locked"
+VERSION = "3.4-source-locked-color-first"
 PRESETS = {
     "natural_appetizing_v2": dict(brightness=1.035, contrast=1.055,
                                  saturation=1.155, warmth=.004, sharpness=1.09),
@@ -24,6 +24,9 @@ PRESETS = {
     # v3: appetizing yet restrained; applies only to original PHOTOS before typography.
     "natural_appetizing_v3": dict(brightness=1.040, contrast=1.080,
                                  saturation=1.165, warmth=.007, sharpness=1.095),
+    # Natural but richer food colors. Not AI; strictly applied to photo pixels before drawing text.
+    "natural_appetizing_v4": dict(brightness=1.045, contrast=1.090,
+                                 saturation=1.210, warmth=.010, sharpness=1.100),
 }
 COLORS = dict(background="#F6F5F0", green="#286B49", cream="#F8F8F0",
               ink="#214A36", yellow="#FFD455")
@@ -179,10 +182,13 @@ def crop_original(im, circle, ratio, framing, target_y):
 
 def natural_grade(im, settings):
     ranges = {"brightness":(.92,1.12), "contrast":(.92,1.15),
-              "saturation":(.90,1.25), "warmth":(-.03,.03),
+              "saturation":(.90,1.32), "warmth":(-.03,.03),
               "sharpness":(1.,1.22)}
+    if set(settings) != set(ranges):
+        raise ValueError("调色字段必须恰好为 " + ", ".join(ranges))
     for k,(low,high) in ranges.items():
-        if not low <= float(settings[k]) <= high:
+        value=float(settings[k])
+        if not np.isfinite(value) or not low <= value <= high:
             raise ValueError("调色参数 {}={} 超出允许范围".format(k,settings[k]))
     im = ImageEnhance.Brightness(im).enhance(float(settings["brightness"]))
     im = ImageEnhance.Contrast(im).enhance(float(settings["contrast"]))
@@ -194,6 +200,62 @@ def natural_grade(im, settings):
         blue = blue.point([min(255,round(v * (1 - warmth))) for v in range(256)])
         im = Image.merge("RGB",(red,green,blue))
     return ImageEnhance.Sharpness(im).enhance(float(settings["sharpness"]))
+
+
+def validate_source_mapping(config, steps, parent):
+    """Bind every user-assigned cooking step to an unambiguous original file and optional SHA256."""
+    if len(steps) != 6:
+        raise ValueError("六联图必须提供六张真实步骤照片")
+    require_hash=bool(config.get("require_source_sha256",False))
+    seen=set()
+    sources=[]
+    for i,step in enumerate(steps,1):
+        number=str(step.get("number","")).zfill(2)
+        if number!=f"{i:02d}":
+            raise ValueError(f"第{i}格编号应为 {i:02d}，当前为 {number}；请先确认步骤顺序")
+        label=str(step.get("label","")).strip()
+        if not label:
+            raise ValueError(f"第{i}格缺少标签文字")
+        path=(parent/str(step["file"])).resolve()
+        if path in seen:
+            raise ValueError(f"第{i}格源图重复：{path}；六联图不得复制同一张照片")
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        seen.add(path)
+        actual_sha=digest(path)
+        expected=step.get("expected_source_sha256")
+        if require_hash and not expected:
+            raise ValueError(f"第{i}格缺少 expected_source_sha256；先运行 --lock-inputs 生成锁定配置")
+        if expected and (len(str(expected))!=64 or str(expected).lower()!=actual_sha):
+            raise ValueError(f"第{i}格照片与记录的 SHA256 不匹配，请检查是否选错或更换了原图：{path.name}")
+        sources.append(dict(number=number,label=label,file=path,
+                            role=str(step.get("role","")).strip(),
+                            sha256=actual_sha))
+    return sources
+
+
+def write_locked_config(config_path, output_path=None):
+    """Hash the explicitly selected six photos without changing their order or captions."""
+    config_path=Path(config_path).resolve()
+    data=json.loads(config_path.read_text(encoding="utf-8"))
+    steps=data["steps"]
+    # Validate original paths before locking, but do not require pre-existing hashes.
+    verify=dict(data,require_source_sha256=False)
+    source_info=validate_source_mapping(verify,steps,config_path.parent)
+    for step,source in zip(steps,source_info):
+        step["expected_source_sha256"]=source["sha256"]
+    data["require_source_sha256"]=True
+    out=(Path(output_path).resolve() if output_path else
+         config_path.with_name(config_path.stem+"_locked.json"))
+    if out==config_path:
+        raise ValueError("锁定配置不能覆盖输入配置，请另存为新文件")
+    out.parent.mkdir(parents=True,exist_ok=True)
+    # Paths in an external directory must be made absolute to stay valid.
+    if out.parent!=config_path.parent:
+        for step,source in zip(steps,source_info):
+            step["file"]=str(source["file"])
+    out.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    return out
 
 def modify(cfg, args):
     for a,b in getattr(args,"swap",[]) or []:
@@ -222,14 +284,8 @@ def generate(config, args):
     config=Path(config).resolve()
     cfg=modify(json.loads(config.read_text("utf-8")),args)
     steps=cfg["steps"]
-    if len(steps) != 6:
-        raise ValueError("只支持六张原片")
-    files=[str(s["file"]) for s in steps]
-    if len(set(files))!=6 and not cfg.get("allow_repeated_files",False):
-        raise ValueError("发现重复源图，默认禁止")
-    nums=[str(s.get("number","")).zfill(2) for s in steps]
-    if nums != [str(i).zfill(2) for i in range(int(nums[0]),int(nums[0])+6)]:
-        raise ValueError("步骤编号必须为连续两位数字")
+    source_mapping=validate_source_mapping(cfg,steps,config.parent)
+    nums=[s["number"] for s in source_mapping]
     if getattr(args,"save_config",None):
         dst=Path(args.save_config).resolve()
         dst.parent.mkdir(parents=True,exist_ok=True)
@@ -255,7 +311,7 @@ def generate(config, args):
     fhash=digest(fontpath)
     if cfg.get("required_font_sha256") and cfg["required_font_sha256"]!=fhash:
         raise ValueError("字体SHA256不匹配")
-    preset=cfg.get("preset","natural_appetizing_v3")
+    preset=cfg.get("preset","natural_appetizing_v4")
     if preset not in PRESETS: raise ValueError("未知预设")
     color=PRESETS[preset].copy()
     color.update(cfg.get("color_override",{}))
@@ -266,9 +322,8 @@ def generate(config, args):
     output=Image.new("RGB",(ww,hh),palette["background"])
     canvas=ImageDraw.Draw(output)
     sources=[]
-    for s in steps:
-        p=(config.parent/s["file"]).resolve()
-        if not p.is_file():raise FileNotFoundError(p)
+    for s,source in zip(steps,source_mapping):
+        p=source["file"]
         im=read_image(p)
         auto=detect_circle(im,cfg.get("subject_type","pot"))
         if "subject" in s:
@@ -351,8 +406,9 @@ def generate(config, args):
                     a=(round(base_x+side*ax*scale),round(base_y+ay*scale))
                     b=(round(base_x+side*bx*scale),round(base_y+by*scale))
                     canvas.line((a,b),fill=palette["yellow"],width=max(3,round(7*scale)))
-        manifest.append(dict(step=nums[i],label=label,source=p.name,
-                   source_sha256=digest(p),subject=sub,crop_px=rect,
+        manifest.append(dict(step=nums[i],label=label,role=source_mapping[i]["role"],
+                   source=p.name,source_sha256=source_mapping[i]["sha256"],
+                   subject=sub,crop_px=rect,
                    geometry=geometry,caption_rect=[tx,ty,tx+tw,ty+th],
                    caption_font_px=fsize,number_font_px=NUMBER_FONT_PX,
                    font_family=REQUIRED_FONT_FAMILY,font_weight=REQUIRED_FONT_WEIGHT,
@@ -386,7 +442,11 @@ def generate(config, args):
             v.thumbnail((340,470))
             preview.paste(v,((j%3)*340+(340-v.width)//2,(j//3)*500))
         preview.save(out.with_name(out.stem+"_校准预览.jpg"),quality=90)
-    qa=dict(version=VERSION,color_applied_before_typography=True,status="auto_warning" if warnings else "auto_complete",
+    qa=dict(version=VERSION,color_applied_before_typography=True,
+            typography_drawn_after_photo_grading=True,
+            source_mapping_verified=True,
+            source_hash_lock_enabled=bool(cfg.get("require_source_sha256",False)),
+            preset=preset,status="auto_warning" if warnings else "auto_complete",
             no_ai_generation=True,no_geometric_warp=True,only_user_originals=True,
             canvas=[ww,hh],panel=[pw,ph],font=fontpath,font_sha256=fhash,
             font_family=REQUIRED_FONT_FAMILY,font_weight=REQUIRED_FONT_WEIGHT,
@@ -395,9 +455,9 @@ def generate(config, args):
             output_sha256=digest(out),warnings=warnings,steps=manifest)
     # Compute QA internally; only the final collage is produced by default.
     # Diagnostic JSON and annotated previews are opt-in, not user checkpoints.
+    qa_file=out.with_name(out.stem+"_QA.json")
+    qa_file.write_text(json.dumps(qa,ensure_ascii=False,indent=2),"utf-8")
     if getattr(args,"debug",False) or getattr(args,"save_qa",False):
-        qa_file=out.with_name(out.stem+"_QA.json")
-        qa_file.write_text(json.dumps(qa,ensure_ascii=False,indent=2),"utf-8")
         print("校验:",qa_file,qa["status"])
     print("成品:",out)
     return out,qa
@@ -415,6 +475,9 @@ def main():
     parser.add_argument("--debug",action="store_true")
     parser.add_argument("--save-qa",action="store_true")
     parser.add_argument("--strict",action="store_true")
+    parser.add_argument("--lock-inputs",action="store_true",
+                        help="校验六张照片顺序并写出含 SHA256 的锁定配置，不制作图")
+    parser.add_argument("--lock-output",help="--lock-inputs 的输出路径")
     parser.add_argument("--check-font",action="store_true",
                         help="不需要六张照片，检查字体族、字重、TTC索引和锁定字号")
     args=parser.parse_args()
@@ -434,6 +497,9 @@ def main():
         return
     if not args.config:
         parser.error("制作六联图需要 --config；仅检查字体可使用 --check-font")
+    if args.lock_inputs:
+        print("已锁定六张原图:",write_locked_config(args.config,args.lock_output))
+        return
     generate(args.config,args)
 
 if __name__=="__main__":
