@@ -444,8 +444,11 @@ def generate(config, args):
         preview.save(out.with_name(out.stem+"_校准预览.jpg"),quality=90)
     qa=dict(version=VERSION,color_applied_before_typography=True,
             typography_drawn_after_photo_grading=True,
-            source_mapping_verified=True,
+            source_file_uniqueness_checked=True,
             source_hash_lock_enabled=bool(cfg.get("require_source_sha256",False)),
+            source_hashes_checked=bool(cfg.get("require_source_sha256",False)),
+            cooking_step_semantics_verified=False,  # requires human inspection
+
             preset=preset,status="auto_warning" if warnings else "auto_complete",
             no_ai_generation=True,no_geometric_warp=True,only_user_originals=True,
             canvas=[ww,hh],panel=[pw,ph],font=fontpath,font_sha256=fhash,
@@ -453,8 +456,8 @@ def generate(config, args):
             font_collection_index=fontindex,caption_font_px=fsize,
             number_font_px=NUMBER_FONT_PX,
             output_sha256=digest(out),warnings=warnings,steps=manifest)
-    # Compute QA internally; only the final collage is produced by default.
-    # Diagnostic JSON and annotated previews are opt-in, not user checkpoints.
+    # Always write a reproducible local QA JSON, while showing only the final collage by default.
+    # Annotated previews remain opt-in, not user checkpoints.
     qa_file=out.with_name(out.stem+"_QA.json")
     qa_file.write_text(json.dumps(qa,ensure_ascii=False,indent=2),"utf-8")
     if getattr(args,"debug",False) or getattr(args,"save_qa",False):
@@ -463,7 +466,7 @@ def generate(config, args):
     return out,qa
 
 def main():
-    parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v3.0 固定字体自动终稿")
+    parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v3.4 先调色后上字＋原图校验")
     parser.add_argument("--config")
     parser.add_argument("--output")
     parser.add_argument("--saturation",type=float)
