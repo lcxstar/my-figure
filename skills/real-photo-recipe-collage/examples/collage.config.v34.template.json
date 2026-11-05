@@ -51,5 +51,6 @@
       "label": "完成出锅",
       "role": "完成出锅"
     }
-  ]
+  ],
+  "enable_color_correction": true
 }
