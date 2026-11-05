@@ -20,7 +20,7 @@
     0.5,
     0.5
   ],
-  "subject_width_fraction": 0.86,
+  "subject_width_fraction": 0.9,
   "color": {
     "brightness": 1.035,
     "contrast": 1.035,
@@ -28,5 +28,13 @@
     "sharpness": 1.035
   },
   "approved_source_sha256": null,
-  "contact_shadow": 0.1
+  "contact_shadow": 0.1,
+  "quality_assurance": {
+    "required_exact_aspect_ratio": "3:4",
+    "required_png": true,
+    "final_checker": "cover_qa.py",
+    "visual_review_required": true,
+    "side_margin_min_fraction": 0.03,
+    "side_margin_preferred_max_fraction": 0.06
+  }
 }
