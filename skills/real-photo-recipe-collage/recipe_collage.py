@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Real-photo recipe collage v3.4: locked source mapping, photo-first grading, typography-last.
+"""Real-photo recipe collage v3.7: grade each source photo, then crop, compose, and draw labels.
 No generative image editing. Pillow/OpenCV only.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
-VERSION = "3.4-source-locked-color-first"
+VERSION = "3.7-mandatory-grade-before-crop"
 PRESETS = {
     "natural_appetizing_v2": dict(brightness=1.035, contrast=1.055,
                                  saturation=1.155, warmth=.004, sharpness=1.09),
@@ -190,6 +190,11 @@ def natural_grade(im, settings):
         value=float(settings[k])
         if not np.isfinite(value) or not low <= value <= high:
             raise ValueError("调色参数 {}={} 超出允许范围".format(k,settings[k]))
+    # An explicit per-photo correction is required: never silently skip the grade stage.
+    baseline = dict(brightness=1.0, contrast=1.0, saturation=1.0,
+                    warmth=0.0, sharpness=1.0)
+    if all(abs(float(settings[k]) - baseline[k]) < 1e-10 for k in baseline):
+        raise ValueError("六联图必须对每张原片执行适度调色，不允许五项参数全部保持中性")
     im = ImageEnhance.Brightness(im).enhance(float(settings["brightness"]))
     im = ImageEnhance.Contrast(im).enhance(float(settings["contrast"]))
     im = ImageEnhance.Color(im).enhance(float(settings["saturation"]))
@@ -286,6 +291,8 @@ def modify(cfg, args):
 def generate(config, args):
     config=Path(config).resolve()
     cfg=modify(json.loads(config.read_text("utf-8")),args)
+    if cfg.get("enable_color_correction",True) is not True:
+        raise ValueError("六联图必须先逐张调色，enable_color_correction 不得关闭")
     steps=cfg["steps"]
     source_mapping=validate_source_mapping(cfg,steps,config.parent)
     nums=[s["number"] for s in source_mapping]
@@ -368,18 +375,27 @@ def generate(config, args):
         x=margin+(i%2)*(pw+gap)
         y=margin+(i//2)*(ph+gap)
         target_y=float(s.get("subject_y_in_tile",cfg.get("subject_y_in_tile",.48)))
-        crop,rect,geometry=crop_original(im,sub,pw/ph,
+        local=color.copy()
+        local.update(s.get("color_override",{}))
+        # Mandatory v3.7 order: ORIGINAL -> per-photo grade -> crop -> tile.
+        # Typography is drawn only after the graded tile has been pasted.
+        graded_original=natural_grade(im,local)
+        # Confirm that the grade actually changed original pixels, rather than
+        # recording an unused configuration. Check a light sampled copy.
+        check_before=np.asarray(im.resize((96,96),Image.Resampling.BILINEAR),dtype=np.int16)
+        check_after=np.asarray(graded_original.resize((96,96),Image.Resampling.BILINEAR),dtype=np.int16)
+        grade_delta=round(float(np.mean(np.abs(check_after-check_before))),3)
+        crop,rect,geometry=crop_original(graded_original,sub,pw/ph,
                    float(s.get("framing",cfg.get("framing",.975))),target_y)
         flags=[]
+        if grade_delta < 0.5: flags.append("COLOR_CORRECTION_LOW_EFFECT")
         if not sub.get("ok"): flags.append("SUBJECT_UNCONFIRMED")
         if sub["source"]=="auto_radial_outer_rim" and not sub.get("ok"):flags.append("LOW_RIM_CONFIDENCE")
         if abs(geometry["center_error_x"])>.025:flags.append("CENTER_X_OUT_OF_TARGET")
         if abs(geometry["center_y"]-target_y)>.045:flags.append("CENTER_Y_OUT_OF_TARGET")
         if geometry["estimated_rim_cut_fraction"]>.015:flags.append("POSSIBLE_RIM_CROP")
         if flags:warnings.append({"step":nums[i],"flags":flags})
-        local=color.copy()
-        local.update(s.get("color_override",{}))
-        tile=natural_grade(crop,local).resize((pw,ph),Image.Resampling.LANCZOS)
+        tile=crop.resize((pw,ph),Image.Resampling.LANCZOS)
         mask=Image.new("L",(pw,ph),0)
         ImageDraw.Draw(mask).rounded_rectangle((0,0,pw-1,ph-1),radius=int(cfg.get("corner_radius",14)),fill=255)
         output.paste(tile,(x,y),mask)
@@ -415,7 +431,10 @@ def generate(config, args):
                    geometry=geometry,caption_rect=[tx,ty,tx+tw,ty+th],
                    caption_font_px=fsize,number_font_px=NUMBER_FONT_PX,
                    font_family=REQUIRED_FONT_FAMILY,font_weight=REQUIRED_FONT_WEIGHT,
-                   font_collection_index=fontindex,color=local,flags=flags))
+                   font_collection_index=fontindex,color=local,
+                   grade_stage="original_before_crop",
+                   grade_mean_abs_pixel_delta=grade_delta,
+                   color_correction_executed=True,flags=flags))
         if getattr(args,"debug",False):
             v=im.copy()
             dd=ImageDraw.Draw(v)
@@ -445,7 +464,12 @@ def generate(config, args):
             v.thumbnail((340,470))
             preview.paste(v,((j%3)*340+(340-v.width)//2,(j//3)*500))
         preview.save(out.with_name(out.stem+"_校准预览.jpg"),quality=90)
-    qa=dict(version=VERSION,color_applied_before_typography=True,
+    qa=dict(version=VERSION,color_applied_to_original_before_crop=True,
+            color_correction_mandatory=True,
+            color_correction_executed_for_all_steps=all(
+                m["color_correction_executed"] for m in manifest),
+            no_color_filters_after_typography=True,
+            color_applied_before_typography=True,
             typography_drawn_after_photo_grading=True,
             source_file_uniqueness_checked=True,
             source_hash_lock_enabled=bool(cfg.get("require_source_sha256",False)),
@@ -469,7 +493,7 @@ def generate(config, args):
     return out,qa
 
 def main():
-    parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v3.4 先调色后上字＋原图校验")
+    parser=argparse.ArgumentParser(description="真实照片菜谱六联图 v3.7 强制原片逐张调色→裁剪→拼图→最后上字")
     parser.add_argument("--config")
     parser.add_argument("--output")
     parser.add_argument("--saturation",type=float)
