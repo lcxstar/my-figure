@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
-VERSION = "3.7-mandatory-grade-before-crop"
+VERSION = "3.9-ellipse-aware-zoom-and-centering"
 PRESETS = {
     "natural_appetizing_v2": dict(brightness=1.035, contrast=1.055,
                                  saturation=1.155, warmth=.004, sharpness=1.09),
@@ -150,6 +150,7 @@ def detect_circle(im, kind="auto"):
 
 
 def crop_original(im, circle, ratio, framing, target_y):
+    """Ellipse-aware maximum safe crop, original pixels only, no geometry warp."""
     w,h=im.size
     if not 1<ratio<1.6 or not .8<=framing<=1:
         raise ValueError("面板比例或裁剪放大系数不合理")
@@ -157,28 +158,40 @@ def crop_original(im, circle, ratio, framing, target_y):
         raise ValueError("subject_y_in_tile 必须在0.38~0.52")
     cx=float(circle["center"][0])*w
     cy=float(circle["center"][1])*h
-    r=float(circle["radius_fraction"])*w
-    # Keep the round rim: its max complete horizontal fill is 1/ratio.
-    cw=min(max(2*r/framing,2*r*ratio*1.025),float(w),float(h)*ratio)
+    rx=float(circle["radius_fraction"])*w
+    aspect=float(circle.get("ellipse_aspect_yx",1.0))
+    if not np.isfinite(aspect) or not .60<=aspect<=1.15:
+        raise ValueError("ellipse_aspect_yx 必须在0.60到1.15之间")
+    ry=rx*aspect
+    pad=.03
+    want=min(float(framing),.94)
+    # Respect BOTH actual projected axes, rather than pretending ry==rx.
+    cw=min(max(2*rx/want,2*ry*ratio/(1-2*pad)),float(w),float(h)*ratio)
     ch=cw/ratio
-    left=max(0.,min(w-cw,cx-cw/2))
-    top=max(0.,min(h-ch,cy-target_y*ch))
-    if 2*r<=ch:
-        lo=max(0.,cy+r-ch)
-        hi=min(h-ch,cy-r)
-        if lo<=hi:top=max(lo,min(hi,top))
+    def start(center,radius,size,extent,target):
+        desired=center-target*size
+        lo=max(0.,center+radius-(1-pad)*size)
+        hi=min(extent-size,center-radius-pad*size)
+        return max(lo,min(hi,desired)) if lo<=hi else max(0.,min(extent-size,desired))
+    left=start(cx,rx,cw,w,.5)
+    top=start(cy,ry,ch,h,target_y)
     rect=[round(left),round(top),round(left+cw),round(top+ch)]
     crop=im.crop(tuple(rect))
     err_x=(cx-(rect[0]+rect[2])/2)/crop.width
     pos_y=(cy-rect[1])/crop.height
-    rim_cut=max(0.,(rect[0]-cx+r)/(2*r), (cx+r-rect[2])/(2*r),
-                (rect[1]-cy+r)/(2*r),(cy+r-rect[3])/(2*r))
-    return crop,rect,dict(center_error_x=round(err_x,5),
-         center_y=round(pos_y,5),expected_center_y=target_y,
-         estimated_rim_width=round(2*r/crop.width,5),
-         estimated_rim_cut_fraction=round(rim_cut,5),
-         source_crop_ratio=round(crop.width/crop.height,6),
-         no_stretch=True)
+    cut=max(0.,(rect[0]-cx+rx)/(2*rx),(cx+rx-rect[2])/(2*rx),
+            (rect[1]-cy+ry)/(2*ry),(cy+ry-rect[3])/(2*ry))
+    fillx,filly=2*rx/crop.width,2*ry/crop.height
+    return crop,rect,dict(
+        center_error_x=round(err_x,5),center_y=round(pos_y,5),
+        expected_center_y=target_y,
+        estimated_rim_width=round(fillx,5),estimated_rim_height=round(filly,5),
+        estimated_rim_cut_fraction=round(cut,5),
+        source_crop_ratio=round(crop.width/crop.height,6),
+        requested_subject_fill=round(float(framing),5),
+        actual_subject_fill=round(fillx,5),
+        ellipse_aspect_yx_used=round(aspect,5),
+        zoom_limited_by_geometry=bool(fillx<want-.015),no_stretch=True)
 
 def natural_grade(im, settings):
     ranges = {"brightness":(.92,1.12), "contrast":(.92,1.15),
@@ -345,11 +358,24 @@ def generate(config, args):
                 and sub.get("verified") is True and correct_hash)
             sub["ok"]=bool(ok)
             sub["source"]="manual_anchor_approved" if ok else "manual_anchor_review_required"
+            # Use observed ellipse geometry only if it agrees with the
+            # approved manual rim; otherwise retain conservative circular fit.
+            if "ellipse_aspect_yx" in sub:
+                sub["ellipse_aspect_source"]="manual_verified"
+            elif (auto.get("ok")
+                  and abs(float(auto["center"][0])-float(x))<.07
+                  and abs(float(auto["center"][1])-float(y))<.07
+                  and abs(float(auto["radius_fraction"])-float(rad))<.075):
+                sub["ellipse_aspect_yx"]=auto["ellipse_aspect_yx"]
+                sub["ellipse_aspect_source"]="auto_agrees_with_manual_anchor"
+            else:
+                sub["ellipse_aspect_yx"]=1.0
+                sub["ellipse_aspect_source"]="conservative_circular_fallback"
             sub["auto_candidate"]=auto
         else:
             sub=auto
         sources.append((p,im,s,sub))
-    # Color is applied to cropped original photos, and all labels/numbers are drawn only afterwards.
+    # Color is applied to complete originals BEFORE cropping, labels/numbers afterwards.
     # Do not run generative editing or color filters over the already labeled collage.
     # One exact font and size for all six. Never silently resize labels.
     fsize=CAPTION_FONT_PX
@@ -394,6 +420,7 @@ def generate(config, args):
         if abs(geometry["center_error_x"])>.025:flags.append("CENTER_X_OUT_OF_TARGET")
         if abs(geometry["center_y"]-target_y)>.045:flags.append("CENTER_Y_OUT_OF_TARGET")
         if geometry["estimated_rim_cut_fraction"]>.015:flags.append("POSSIBLE_RIM_CROP")
+        if geometry["estimated_rim_width"]<.78:flags.append("SUBJECT_TOO_SMALL_REVIEW")
         if flags:warnings.append({"step":nums[i],"flags":flags})
         tile=crop.resize((pw,ph),Image.Resampling.LANCZOS)
         mask=Image.new("L",(pw,ph),0)
@@ -441,7 +468,8 @@ def generate(config, args):
             cx=sub["center"][0]*im.width
             cy=sub["center"][1]*im.height
             rr=sub["radius_fraction"]*im.width
-            dd.ellipse((cx-rr,cy-rr,cx+rr,cy+rr),outline="#12E14F",width=8)
+            rr_y=rr*float(sub.get("ellipse_aspect_yx",1.0))
+            dd.ellipse((cx-rr,cy-rr_y,cx+rr,cy+rr_y),outline="#12E14F",width=8)
             dd.rectangle(rect,outline="#FC3549",width=8)
             debug.append(v)
     out=(Path(args.output).resolve() if getattr(args,"output",None)
